@@ -1,0 +1,1842 @@
+// FamilyGuard Dashboard Application
+
+// State
+let token = localStorage.getItem('familyguard_token');
+let user = JSON.parse(localStorage.getItem('familyguard_user') || 'null');
+let socket = null;
+let liveMap = null;
+let fullMap = null;
+let currentMarker = null;
+let routePolyline = null;
+let geofenceCircle = null;
+let healthCharts = {};
+
+// API Base URL
+const API_URL = '/api/v1';
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  lucide.createIcons();
+  
+  if (token && user) {
+    showDashboard();
+  } else {
+    showLogin();
+  }
+  
+  // Login form handler
+  document.getElementById('login-form').addEventListener('submit', handleLogin);
+});
+
+// Auth Functions
+async function handleLogin(e) {
+  e.preventDefault();
+  
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const errorEl = document.getElementById('login-error');
+  
+  try {
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Login failed');
+    }
+    
+    token = data.token;
+    user = data.user;
+    
+    localStorage.setItem('familyguard_token', token);
+    localStorage.setItem('familyguard_user', JSON.stringify(user));
+    
+    showDashboard();
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove('hidden');
+  }
+}
+
+function logout() {
+  token = null;
+  user = null;
+  localStorage.removeItem('familyguard_token');
+  localStorage.removeItem('familyguard_user');
+  
+  if (socket) {
+    socket.disconnect();
+  }
+  
+  showLogin();
+}
+
+function showLogin() {
+  document.getElementById('login-page').style.display = 'flex';
+  document.getElementById('dashboard').classList.remove('active');
+}
+
+function showDashboard() {
+  document.getElementById('login-page').style.display = 'none';
+  document.getElementById('dashboard').classList.add('active');
+  
+  // Update user info
+  document.getElementById('user-avatar').textContent = user.name ? user.name[0].toUpperCase() : 'U';
+  document.getElementById('user-name').textContent = user.name || user.username;
+  
+  // Initialize Socket.IO
+  initSocket();
+  
+  // Load initial data
+  loadStatus();
+  loadAlertCount();
+  
+  // Navigate to overview
+  navigateTo('overview');
+  
+  lucide.createIcons();
+}
+
+// Socket.IO
+function initSocket() {
+  socket = io();
+  
+  socket.on('connect', () => {
+    console.log('Connected to server');
+    socket.emit('join:dashboard');
+  });
+  
+  socket.on('location:update', (data) => {
+    updateLocation(data);
+  });
+  
+  socket.on('alert:new', (alert) => {
+    showNotification(alert.title, alert.message);
+    loadAlertCount();
+    
+    if (alert.type === 'sos' || alert.type === 'fall') {
+      showCriticalBanner(alert);
+    }
+  });
+  
+  socket.on('checkin:new', (checkin) => {
+    updateLastCheckin(checkin);
+    showNotification('Check-in Received', 'Father has checked in');
+  });
+  
+  socket.on('sos:triggered', (sos) => {
+    showCriticalBanner({ type: 'sos', title: 'SOS EMERGENCY', message: 'Father has triggered an emergency alert!' });
+  });
+  
+  socket.on('status:change', (status) => {
+    updateStatusSidebar(status);
+  });
+  
+  socket.on('health:update', (health) => {
+    if (health.type === 'mood') {
+      document.getElementById('current-mood').textContent = getMoodEmoji(health.value);
+    } else if (health.type === 'steps') {
+      document.getElementById('steps-today').textContent = formatNumber(health.value);
+    }
+  });
+}
+
+// Navigation
+function navigateTo(page) {
+  // Update nav items
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.classList.remove('active');
+  });
+  
+  const navItem = document.querySelector(`[data-testid="nav-${page}"]`);
+  if (navItem) navItem.classList.add('active');
+  
+  // Load page content
+  const content = document.getElementById('main-content');
+  
+  switch (page) {
+    case 'overview':
+      loadOverviewPage(content);
+      break;
+    case 'map':
+      loadMapPage(content);
+      break;
+    case 'alerts':
+      loadAlertsPage(content);
+      break;
+    case 'health':
+      loadHealthPage(content);
+      break;
+    case 'media':
+      loadMediaPage(content);
+      break;
+    case 'call':
+      loadCallPage(content);
+      break;
+    case 'messages':
+      loadMessagesPage(content);
+      break;
+    case 'reports':
+      loadReportsPage(content);
+      break;
+    case 'settings':
+      loadSettingsPage(content);
+      break;
+    default:
+      loadOverviewPage(content);
+  }
+}
+
+// Page Loaders
+async function loadOverviewPage(container) {
+  container.innerHTML = `
+    <div class="grid grid-2">
+      <div class="card" style="grid-column: span 2;">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Live Location</h2>
+            <p class="card-subtitle">Real-time GPS tracking</p>
+          </div>
+          <button class="btn btn-secondary" onclick="navigateTo('map')" data-testid="view-full-map-btn">
+            <i data-lucide="maximize-2"></i>
+            Full Map
+          </button>
+        </div>
+        <div id="live-map-container" class="map-container"></div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Today's Activity</h2>
+        </div>
+        <div id="activity-stats" class="grid grid-2" style="gap: 12px;">
+          <div class="stat-card">
+            <div class="stat-icon"><i data-lucide="footprints"></i></div>
+            <div id="overview-steps" class="stat-value">--</div>
+            <div class="stat-label">Steps</div>
+            <div id="overview-step-goal" class="stat-goal">Goal: 5,000</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i data-lucide="droplet"></i></div>
+            <div id="overview-water" class="stat-value">--</div>
+            <div class="stat-label">Glasses Water</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Recent Alerts</h2>
+          <a href="#" onclick="navigateTo('alerts'); return false;" style="color: var(--brand-primary); font-size: 14px;">View All</a>
+        </div>
+        <div id="recent-alerts">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Last Check-in</h2>
+        </div>
+        <div id="last-checkin-card" style="text-align: center;">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Voice Messages</h2>
+          <a href="#" onclick="navigateTo('media'); return false;" style="color: var(--brand-primary); font-size: 14px;">View All</a>
+        </div>
+        <div id="recent-voices">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  
+  // Initialize live map
+  setTimeout(() => {
+    initLiveMap();
+    loadTodayRoute();
+  }, 100);
+  
+  // Load data
+  loadTodayHealth();
+  loadRecentAlerts();
+  loadLastCheckin();
+  loadRecentVoices();
+}
+
+async function loadMapPage(container) {
+  container.innerHTML = `
+    <div class="card" style="height: calc(100vh - 150px);">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">Location History</h2>
+          <p class="card-subtitle">View today's route and history</p>
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <input type="date" id="history-date" class="form-group input" style="margin: 0;" data-testid="history-date-picker">
+          <button class="btn btn-primary" onclick="loadHistoryForDate()" data-testid="load-history-btn">Load</button>
+        </div>
+      </div>
+      <div id="full-map-container" class="map-container" style="height: calc(100% - 120px);"></div>
+      <div class="timeline-slider">
+        <input type="range" id="timeline-range" min="0" max="100" value="100" data-testid="timeline-slider">
+        <div class="timeline-info">
+          <span id="timeline-start">00:00</span>
+          <span id="timeline-current">Now</span>
+          <span id="timeline-end">23:59</span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  
+  // Set today's date
+  document.getElementById('history-date').value = new Date().toISOString().split('T')[0];
+  
+  // Initialize full map
+  setTimeout(() => {
+    initFullMap();
+    loadTodayRoute(true);
+  }, 100);
+  
+  // Timeline slider
+  document.getElementById('timeline-range').addEventListener('input', handleTimelineChange);
+}
+
+async function loadAlertsPage(container) {
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">Alerts Center</h2>
+          <p class="card-subtitle">All alerts and notifications</p>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <select id="alert-filter" class="form-group input" style="margin: 0; width: auto;" onchange="filterAlerts()" data-testid="alert-filter-select">
+            <option value="">All Types</option>
+            <option value="sos">SOS</option>
+            <option value="fall">Fall Detection</option>
+            <option value="geofence">Geofence</option>
+            <option value="battery">Battery</option>
+            <option value="offline">Offline</option>
+            <option value="missed_checkin">Missed Check-in</option>
+            <option value="inactivity">Inactivity</option>
+          </select>
+          <button class="btn btn-secondary" onclick="markAllAlertsRead()" data-testid="mark-all-read-btn">
+            <i data-lucide="check-check"></i>
+            Mark All Read
+          </button>
+        </div>
+      </div>
+      <div id="alerts-list">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  loadAllAlerts();
+}
+
+async function loadHealthPage(container) {
+  container.innerHTML = `
+    <div class="grid grid-4" style="margin-bottom: 24px;">
+      <div class="stat-card">
+        <div class="mood-display" id="health-mood">--</div>
+        <div class="stat-label">Current Mood</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i data-lucide="footprints"></i></div>
+        <div id="health-steps" class="stat-value">--</div>
+        <div class="stat-label">Steps Today</div>
+        <div class="stat-goal" id="health-step-goal">Goal: 5,000</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i data-lucide="droplet"></i></div>
+        <div id="health-water" class="stat-value">--</div>
+        <div class="stat-label">Glasses Water</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i data-lucide="moon"></i></div>
+        <div id="health-sleep" class="stat-value">--</div>
+        <div class="stat-label">Hours Sleep</div>
+      </div>
+    </div>
+    
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Mood Trend (7 Days)</h2>
+        </div>
+        <div class="chart-container">
+          <canvas id="mood-chart"></canvas>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Daily Steps (14 Days)</h2>
+        </div>
+        <div class="chart-container">
+          <canvas id="steps-chart"></canvas>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Water Intake (7 Days)</h2>
+        </div>
+        <div class="chart-container">
+          <canvas id="water-chart"></canvas>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Sleep Pattern (7 Days)</h2>
+        </div>
+        <div class="chart-container">
+          <canvas id="sleep-chart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Medication Compliance</h2>
+      </div>
+      <div id="medication-compliance">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  loadHealthData();
+}
+
+async function loadMediaPage(container) {
+  container.innerHTML = `
+    <div class="grid grid-2">
+      <div class="card" style="grid-column: span 2;">
+        <div class="card-header">
+          <h2 class="card-title">Photo Gallery</h2>
+          <p class="card-subtitle">Check-in photos and daily captures</p>
+        </div>
+        <div id="photo-gallery" class="photo-grid">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Voice Messages from Father</h2>
+        </div>
+        <div id="voice-messages-received">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">Voice Messages Sent</h2>
+        </div>
+        <div id="voice-messages-sent">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  loadPhotos();
+  loadVoiceMessages();
+}
+
+async function loadCallPage(container) {
+  container.innerHTML = `
+    <div class="card" style="text-align: center; padding: 60px;">
+      <h2 class="card-title" style="margin-bottom: 24px;">Video Call with Father</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 40px;">Start a video call to check on Father</p>
+      
+      <div id="call-container" style="margin-bottom: 40px; display: none;">
+        <video id="remote-video" autoplay playsinline style="width: 100%; max-width: 640px; border-radius: 16px; background: #000;"></video>
+        <video id="local-video" autoplay playsinline muted style="width: 150px; position: absolute; bottom: 20px; right: 20px; border-radius: 8px;"></video>
+      </div>
+      
+      <div id="call-actions">
+        <button class="btn btn-primary" style="padding: 20px 60px; font-size: 18px;" onclick="startVideoCall()" data-testid="start-call-btn">
+          <i data-lucide="video"></i>
+          Start Video Call
+        </button>
+      </div>
+      
+      <div id="call-status" style="margin-top: 24px; color: var(--text-secondary);"></div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+}
+
+async function loadMessagesPage(container) {
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Send Message to Father</h2>
+        <p class="card-subtitle">Messages will be read aloud on his phone</p>
+      </div>
+      <div style="display: flex; gap: 12px; margin-bottom: 24px;">
+        <input type="text" id="message-text" placeholder="Type a message..." class="form-group input" style="flex: 1; margin: 0;" data-testid="message-input">
+        <button class="btn btn-primary" onclick="sendTextMessage()" data-testid="send-message-btn">
+          <i data-lucide="send"></i>
+          Send
+        </button>
+      </div>
+      
+      <div class="card-header">
+        <h2 class="card-title">Record Voice Message</h2>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <button id="record-btn" class="btn btn-secondary" onclick="toggleRecording()" data-testid="record-voice-btn">
+          <i data-lucide="mic"></i>
+          Start Recording
+        </button>
+        <span id="recording-status" style="color: var(--text-secondary);"></span>
+      </div>
+    </div>
+    
+    <div class="card" style="margin-top: 24px;">
+      <div class="card-header">
+        <h2 class="card-title">Message History</h2>
+      </div>
+      <div id="message-history">
+        <p style="color: var(--text-secondary); text-align: center; padding: 40px;">No messages yet</p>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+}
+
+async function loadReportsPage(container) {
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Reports & History</h2>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <input type="date" id="report-from" class="form-group input" style="margin: 0;" data-testid="report-from-date">
+          <span>to</span>
+          <input type="date" id="report-to" class="form-group input" style="margin: 0;" data-testid="report-to-date">
+          <button class="btn btn-primary" onclick="generateReport()" data-testid="generate-report-btn">Generate</button>
+        </div>
+      </div>
+      
+      <div id="report-content" style="display: none;">
+        <div class="grid grid-4" style="margin-bottom: 24px;">
+          <div class="stat-card">
+            <div id="report-total-steps" class="stat-value">--</div>
+            <div class="stat-label">Total Steps</div>
+          </div>
+          <div class="stat-card">
+            <div id="report-total-alerts" class="stat-value">--</div>
+            <div class="stat-label">Alerts</div>
+          </div>
+          <div class="stat-card">
+            <div id="report-total-checkins" class="stat-value">--</div>
+            <div class="stat-label">Check-ins</div>
+          </div>
+          <div class="stat-card">
+            <div id="report-places-visited" class="stat-value">--</div>
+            <div class="stat-label">Places Visited</div>
+          </div>
+        </div>
+        
+        <div class="card-header">
+          <h3 class="card-title">Location History</h3>
+        </div>
+        <div id="report-map-container" class="map-container" style="height: 400px; margin-bottom: 24px;"></div>
+        
+        <button class="btn btn-secondary" onclick="exportReport()" data-testid="export-report-btn">
+          <i data-lucide="download"></i>
+          Export as PDF
+        </button>
+      </div>
+      
+      <div id="report-placeholder" style="text-align: center; padding: 60px; color: var(--text-secondary);">
+        Select a date range and click Generate to view reports
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  
+  // Set default dates (last 7 days)
+  const today = new Date();
+  const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+  document.getElementById('report-from').value = weekAgo.toISOString().split('T')[0];
+  document.getElementById('report-to').value = today.toISOString().split('T')[0];
+}
+
+async function loadSettingsPage(container) {
+  container.innerHTML = `
+    <div class="card">
+      <h2 class="card-title" style="margin-bottom: 24px;">Settings</h2>
+      
+      <div class="settings-section">
+        <h3>Geofence Settings</h3>
+        <p style="color: var(--text-secondary); margin-bottom: 16px;">Draw a safe zone on the map. Alerts will trigger if Father leaves this area.</p>
+        <div id="geofence-map-container" class="map-container" style="height: 300px; margin-bottom: 16px;"></div>
+        <div style="display: flex; gap: 16px; align-items: center;">
+          <div class="form-group" style="margin: 0;">
+            <label>Radius (meters)</label>
+            <input type="number" id="geofence-radius" value="500" min="100" max="5000" style="width: 120px;" data-testid="geofence-radius-input">
+          </div>
+          <button class="btn btn-primary" onclick="saveGeofence()" data-testid="save-geofence-btn">Save Geofence</button>
+        </div>
+      </div>
+      
+      <div class="settings-section">
+        <h3>Alert Settings</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>Check-in Reminder Interval</h4>
+            <p>Alert if no check-in received</p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="checkin-interval" value="4" min="1" max="12" data-testid="checkin-interval-input"> hours
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>Inactivity Alert Threshold</h4>
+            <p>Alert if no movement detected</p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="inactivity-threshold" value="6" min="2" max="24" data-testid="inactivity-threshold-input"> hours
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>Speed Alert Threshold</h4>
+            <p>Alert if moving faster than</p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="speed-threshold" value="80" min="30" max="120" data-testid="speed-threshold-input"> km/h
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>Low Battery Alert</h4>
+            <p>Alert when battery drops below</p>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="battery-threshold" value="20" min="10" max="50" data-testid="battery-threshold-input"> %
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="saveAlertSettings()" style="margin-top: 16px;" data-testid="save-alert-settings-btn">Save Alert Settings</button>
+      </div>
+      
+      <div class="settings-section">
+        <h3>Father's Profile</h3>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="father-name-input" placeholder="Father's name" data-testid="father-name-input">
+        </div>
+        <div class="form-group">
+          <label>Phone Number</label>
+          <input type="tel" id="father-phone-input" placeholder="+91 XXXXXXXXXX" data-testid="father-phone-input">
+        </div>
+        <div class="form-group">
+          <label>Daily Step Goal</label>
+          <input type="number" id="step-goal-input" value="5000" min="1000" max="20000" data-testid="step-goal-input">
+        </div>
+        <button class="btn btn-primary" onclick="saveProfile()" data-testid="save-profile-btn">Save Profile</button>
+      </div>
+      
+      <div class="settings-section">
+        <h3>Medications</h3>
+        <div id="medications-list">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+        <button class="btn btn-secondary" onclick="addMedication()" style="margin-top: 16px;" data-testid="add-medication-btn">
+          <i data-lucide="plus"></i>
+          Add Medication
+        </button>
+      </div>
+    </div>
+  `;
+  
+  lucide.createIcons();
+  loadSettings();
+  initGeofenceMap();
+}
+
+// Map Functions
+function initLiveMap() {
+  const container = document.getElementById('live-map-container');
+  if (!container || liveMap) return;
+  
+  liveMap = L.map(container).setView([28.6139, 77.2090], 15);
+  
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(liveMap);
+  
+  // Add marker
+  currentMarker = L.marker([28.6139, 77.2090], {
+    icon: L.divIcon({
+      className: 'custom-marker',
+      html: '<div style="width: 40px; height: 40px; background: var(--brand-primary); border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 10px rgba(0,0,0,0.3);"></div>',
+      iconSize: [40, 40],
+      iconAnchor: [20, 20]
+    })
+  }).addTo(liveMap);
+}
+
+function initFullMap() {
+  const container = document.getElementById('full-map-container');
+  if (!container || fullMap) return;
+  
+  fullMap = L.map(container).setView([28.6139, 77.2090], 14);
+  
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(fullMap);
+}
+
+function initGeofenceMap() {
+  const container = document.getElementById('geofence-map-container');
+  if (!container) return;
+  
+  const geofenceMap = L.map(container).setView([28.6139, 77.2090], 14);
+  
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(geofenceMap);
+  
+  // Load existing geofence
+  fetchWithAuth(`${API_URL}/settings/geofence`).then(data => {
+    if (data && data.latitude) {
+      geofenceMap.setView([data.latitude, data.longitude], 15);
+      document.getElementById('geofence-radius').value = data.radius;
+      
+      geofenceCircle = L.circle([data.latitude, data.longitude], {
+        radius: data.radius,
+        color: '#3E7C78',
+        fillColor: '#3E7C78',
+        fillOpacity: 0.2
+      }).addTo(geofenceMap);
+    }
+  });
+  
+  // Click to set new center
+  geofenceMap.on('click', (e) => {
+    const radius = parseInt(document.getElementById('geofence-radius').value) || 500;
+    
+    if (geofenceCircle) {
+      geofenceMap.removeLayer(geofenceCircle);
+    }
+    
+    geofenceCircle = L.circle([e.latlng.lat, e.latlng.lng], {
+      radius: radius,
+      color: '#3E7C78',
+      fillColor: '#3E7C78',
+      fillOpacity: 0.2
+    }).addTo(geofenceMap);
+    
+    geofenceCircle.latLng = e.latlng;
+  });
+  
+  window.geofenceMap = geofenceMap;
+}
+
+async function loadTodayRoute(fullMapMode = false) {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/location/today`);
+    
+    if (data && data.length > 0) {
+      const map = fullMapMode ? fullMap : liveMap;
+      if (!map) return;
+      
+      // Draw route polyline
+      const points = data.map(loc => [loc.latitude, loc.longitude]);
+      
+      if (routePolyline) {
+        map.removeLayer(routePolyline);
+      }
+      
+      routePolyline = L.polyline(points, {
+        color: '#3E7C78',
+        weight: 4,
+        opacity: 0.8
+      }).addTo(map);
+      
+      // Update current position
+      const latest = data[data.length - 1];
+      updateLocation(latest);
+      
+      // Fit map to route
+      if (points.length > 1) {
+        map.fitBounds(routePolyline.getBounds(), { padding: [50, 50] });
+      }
+      
+      // Store for timeline
+      window.todayLocations = data;
+    }
+  } catch (err) {
+    console.error('Error loading route:', err);
+  }
+}
+
+function updateLocation(data) {
+  if (currentMarker && liveMap) {
+    currentMarker.setLatLng([data.latitude, data.longitude]);
+    liveMap.panTo([data.latitude, data.longitude]);
+  }
+  
+  // Update address display
+  document.getElementById('current-address').textContent = data.address || `${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`;
+  document.getElementById('location-updated').textContent = `Updated: ${formatTime(data.timestamp)}`;
+}
+
+async function loadHistoryForDate() {
+  const date = document.getElementById('history-date').value;
+  if (!date) return;
+  
+  try {
+    const data = await fetchWithAuth(`${API_URL}/location/history?date=${date}`);
+    
+    if (fullMap && data && data.length > 0) {
+      // Clear existing route
+      if (routePolyline) {
+        fullMap.removeLayer(routePolyline);
+      }
+      
+      // Draw new route
+      const points = data.map(loc => [loc.latitude, loc.longitude]);
+      routePolyline = L.polyline(points, {
+        color: '#3E7C78',
+        weight: 4,
+        opacity: 0.8
+      }).addTo(fullMap);
+      
+      fullMap.fitBounds(routePolyline.getBounds(), { padding: [50, 50] });
+      
+      // Store for timeline
+      window.historyLocations = data;
+      
+      // Update timeline
+      updateTimeline(data);
+    }
+  } catch (err) {
+    console.error('Error loading history:', err);
+  }
+}
+
+function updateTimeline(locations) {
+  if (!locations || locations.length === 0) return;
+  
+  const slider = document.getElementById('timeline-range');
+  slider.max = locations.length - 1;
+  slider.value = locations.length - 1;
+  
+  const first = new Date(locations[0].timestamp);
+  const last = new Date(locations[locations.length - 1].timestamp);
+  
+  document.getElementById('timeline-start').textContent = formatTimeOnly(first);
+  document.getElementById('timeline-end').textContent = formatTimeOnly(last);
+  document.getElementById('timeline-current').textContent = formatTimeOnly(last);
+}
+
+function handleTimelineChange(e) {
+  const index = parseInt(e.target.value);
+  const locations = window.historyLocations || window.todayLocations || [];
+  
+  if (locations[index] && fullMap) {
+    fullMap.panTo([locations[index].latitude, locations[index].longitude]);
+    document.getElementById('timeline-current').textContent = formatTimeOnly(new Date(locations[index].timestamp));
+  }
+}
+
+// Data Loading Functions
+async function loadStatus() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/status`);
+    updateStatusSidebar(data);
+  } catch (err) {
+    console.error('Error loading status:', err);
+  }
+}
+
+function updateStatusSidebar(data) {
+  if (data.device) {
+    document.getElementById('father-name').textContent = data.device.name || 'Father';
+  }
+  
+  if (data.status) {
+    document.getElementById('battery-level').textContent = `${data.status.battery_level || 0}%`;
+    
+    const onlineEl = document.getElementById('online-status');
+    if (data.status.is_online) {
+      onlineEl.className = 'online-status online';
+      onlineEl.innerHTML = '<span class="dot"></span><span>Online</span>';
+    } else {
+      onlineEl.className = 'online-status offline';
+      onlineEl.innerHTML = '<span class="dot"></span><span>Offline</span>';
+    }
+  }
+  
+  if (data.location) {
+    document.getElementById('current-address').textContent = data.location.address || `${data.location.latitude.toFixed(6)}, ${data.location.longitude.toFixed(6)}`;
+    document.getElementById('location-updated').textContent = `Updated: ${formatTime(data.location.timestamp)}`;
+  }
+  
+  if (data.last_checkin) {
+    document.getElementById('last-checkin').textContent = formatTimeShort(data.last_checkin.timestamp);
+  }
+  
+  if (data.today) {
+    document.getElementById('steps-today').textContent = formatNumber(data.today.steps);
+    document.getElementById('current-mood').textContent = data.today.mood ? getMoodEmoji(data.today.mood) : '--';
+  }
+}
+
+async function loadAlertCount() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/alerts/unread-count`);
+    const badge = document.getElementById('alert-count');
+    
+    if (data.count > 0) {
+      badge.textContent = data.count;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  } catch (err) {
+    console.error('Error loading alert count:', err);
+  }
+}
+
+async function loadTodayHealth() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/health/today`);
+    
+    const stepsEl = document.getElementById('overview-steps');
+    const waterEl = document.getElementById('overview-water');
+    const goalEl = document.getElementById('overview-step-goal');
+    
+    if (stepsEl) stepsEl.textContent = formatNumber(data.steps || 0);
+    if (waterEl) waterEl.textContent = data.water || 0;
+    if (goalEl) goalEl.textContent = `Goal: ${formatNumber(data.step_goal || 5000)}`;
+  } catch (err) {
+    console.error('Error loading health:', err);
+  }
+}
+
+async function loadRecentAlerts() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/alerts?limit=5`);
+    const container = document.getElementById('recent-alerts');
+    
+    if (!container) return;
+    
+    if (!data.alerts || data.alerts.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">No recent alerts</p>';
+      return;
+    }
+    
+    container.innerHTML = data.alerts.map(alert => renderAlert(alert)).join('');
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Error loading alerts:', err);
+  }
+}
+
+async function loadAllAlerts() {
+  try {
+    const filter = document.getElementById('alert-filter')?.value || '';
+    const url = filter ? `${API_URL}/alerts?type=${filter}&limit=50` : `${API_URL}/alerts?limit=50`;
+    
+    const data = await fetchWithAuth(url);
+    const container = document.getElementById('alerts-list');
+    
+    if (!container) return;
+    
+    if (!data.alerts || data.alerts.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 40px;">No alerts found</p>';
+      return;
+    }
+    
+    container.innerHTML = data.alerts.map(alert => renderAlert(alert, true)).join('');
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Error loading alerts:', err);
+  }
+}
+
+function renderAlert(alert, showActions = false) {
+  const iconMap = {
+    sos: 'alert-triangle',
+    fall: 'activity',
+    geofence: 'map-pin',
+    battery: 'battery-low',
+    offline: 'wifi-off',
+    missed_checkin: 'clock',
+    inactivity: 'pause-circle',
+    speed: 'gauge'
+  };
+  
+  const icon = iconMap[alert.type] || 'bell';
+  const unreadClass = alert.is_read ? '' : 'unread';
+  
+  return `
+    <div class="alert-item ${alert.type} ${unreadClass}" data-id="${alert.id}">
+      <div class="alert-icon ${alert.type}">
+        <i data-lucide="${icon}"></i>
+      </div>
+      <div class="alert-content">
+        <div class="alert-title">${alert.title}</div>
+        <div class="alert-message">${alert.message || ''}</div>
+        <div class="alert-time">${formatTime(alert.created_at)}</div>
+      </div>
+      ${showActions && !alert.is_read ? `<button class="btn btn-secondary" onclick="markAlertRead(${alert.id})" data-testid="mark-read-${alert.id}">Mark Read</button>` : ''}
+    </div>
+  `;
+}
+
+async function markAlertRead(id) {
+  try {
+    await fetchWithAuth(`${API_URL}/alerts/${id}/read`, { method: 'PUT' });
+    loadAllAlerts();
+    loadAlertCount();
+  } catch (err) {
+    console.error('Error marking alert read:', err);
+  }
+}
+
+async function markAllAlertsRead() {
+  try {
+    await fetchWithAuth(`${API_URL}/alerts/read-all`, { method: 'PUT' });
+    loadAllAlerts();
+    loadAlertCount();
+  } catch (err) {
+    console.error('Error marking all read:', err);
+  }
+}
+
+function filterAlerts() {
+  loadAllAlerts();
+}
+
+async function loadLastCheckin() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/checkin/latest`);
+    const container = document.getElementById('last-checkin-card');
+    
+    if (!container) return;
+    
+    if (data.message) {
+      container.innerHTML = '<p style="color: var(--text-secondary);">No check-ins yet</p>';
+      return;
+    }
+    
+    container.innerHTML = `
+      ${data.photo_url ? `<img src="${data.photo_url}" style="width: 150px; height: 150px; border-radius: 12px; object-fit: cover; margin-bottom: 16px;">` : ''}
+      <p style="font-size: 24px; font-weight: 600; color: var(--status-success);">I Am Safe</p>
+      <p style="color: var(--text-secondary); margin-top: 8px;">${formatTime(data.timestamp)}</p>
+    `;
+  } catch (err) {
+    console.error('Error loading checkin:', err);
+  }
+}
+
+function updateLastCheckin(checkin) {
+  document.getElementById('last-checkin').textContent = formatTimeShort(checkin.timestamp);
+  loadLastCheckin();
+}
+
+async function loadRecentVoices() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/media/voices?limit=3&direction=from_app`);
+    const container = document.getElementById('recent-voices');
+    
+    if (!container) return;
+    
+    if (!data.voices || data.voices.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">No voice messages</p>';
+      return;
+    }
+    
+    container.innerHTML = data.voices.map(voice => renderVoice(voice)).join('');
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Error loading voices:', err);
+  }
+}
+
+function renderVoice(voice) {
+  return `
+    <div class="voice-item">
+      <button class="voice-play-btn" onclick="playVoice('${voice.file_url}')" data-testid="play-voice-${voice.id}">
+        <i data-lucide="play"></i>
+      </button>
+      <div class="voice-info">
+        <div class="voice-duration">${voice.duration ? formatDuration(voice.duration) : 'Voice message'}</div>
+        <div class="voice-time">${formatTime(voice.created_at)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function playVoice(url) {
+  const audio = new Audio(url);
+  audio.play();
+}
+
+async function loadHealthData() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/health/summary`);
+    
+    // Update current values
+    const moodEl = document.getElementById('health-mood');
+    const stepsEl = document.getElementById('health-steps');
+    const waterEl = document.getElementById('health-water');
+    const sleepEl = document.getElementById('health-sleep');
+    
+    if (moodEl) moodEl.textContent = data.today?.mood ? getMoodEmoji(data.today.mood) : '--';
+    if (stepsEl) stepsEl.textContent = formatNumber(data.today?.steps || 0);
+    if (waterEl) waterEl.textContent = data.today?.water || 0;
+    if (sleepEl && data.sleep?.length > 0) sleepEl.textContent = data.sleep[data.sleep.length - 1]?.value || '--';
+    
+    // Render charts
+    renderMoodChart(data.moods);
+    renderStepsChart(data.steps);
+    renderWaterChart(data.water);
+    renderSleepChart(data.sleep);
+    
+    // Render medication compliance
+    renderMedicationCompliance(data.medications, data.medication_logs);
+  } catch (err) {
+    console.error('Error loading health data:', err);
+  }
+}
+
+function renderMoodChart(moods) {
+  const ctx = document.getElementById('mood-chart');
+  if (!ctx || !moods) return;
+  
+  const moodValues = { happy: 5, neutral: 3, sad: 2, tired: 2, sick: 1 };
+  
+  const labels = moods.map(m => formatDateShort(m.timestamp));
+  const values = moods.map(m => moodValues[m.value] || 3);
+  
+  if (healthCharts.mood) healthCharts.mood.destroy();
+  
+  healthCharts.mood = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Mood',
+        data: values,
+        borderColor: '#3E7C78',
+        backgroundColor: 'rgba(62, 124, 120, 0.1)',
+        fill: true,
+        tension: 0.4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { min: 0, max: 5, grid: { display: false } },
+        x: { grid: { display: false } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
+function renderStepsChart(steps) {
+  const ctx = document.getElementById('steps-chart');
+  if (!ctx || !steps) return;
+  
+  const labels = steps.map(s => formatDateShort(s.timestamp));
+  const values = steps.map(s => parseInt(s.value) || 0);
+  
+  if (healthCharts.steps) healthCharts.steps.destroy();
+  
+  healthCharts.steps = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Steps',
+        data: values,
+        backgroundColor: '#3E7C78'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { grid: { display: false } },
+        x: { grid: { display: false } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
+function renderWaterChart(water) {
+  const ctx = document.getElementById('water-chart');
+  if (!ctx || !water) return;
+  
+  // Group by date
+  const grouped = {};
+  water.forEach(w => {
+    const date = w.timestamp.split('T')[0];
+    grouped[date] = (grouped[date] || 0) + parseInt(w.value);
+  });
+  
+  const labels = Object.keys(grouped);
+  const values = Object.values(grouped);
+  
+  if (healthCharts.water) healthCharts.water.destroy();
+  
+  healthCharts.water = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels.map(d => formatDateShort(d)),
+      datasets: [{
+        label: 'Glasses',
+        data: values,
+        backgroundColor: '#457B9D'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { grid: { display: false } },
+        x: { grid: { display: false } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
+function renderSleepChart(sleep) {
+  const ctx = document.getElementById('sleep-chart');
+  if (!ctx || !sleep) return;
+  
+  const labels = sleep.map(s => formatDateShort(s.timestamp));
+  const values = sleep.map(s => parseFloat(s.value) || 0);
+  
+  if (healthCharts.sleep) healthCharts.sleep.destroy();
+  
+  healthCharts.sleep = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Hours',
+        data: values,
+        backgroundColor: '#A3B18A'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { grid: { display: false } },
+        x: { grid: { display: false } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
+function renderMedicationCompliance(medications, logs) {
+  const container = document.getElementById('medication-compliance');
+  if (!container) return;
+  
+  if (!medications || medications.length === 0) {
+    container.innerHTML = '<p style="color: var(--text-secondary);">No medications configured</p>';
+    return;
+  }
+  
+  container.innerHTML = medications.map(med => {
+    const medLogs = logs.filter(l => l.medication_id === med.id);
+    const takenCount = medLogs.filter(l => l.taken).length;
+    
+    return `
+      <div style="display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border-default);">
+        <div>
+          <strong>${med.name}</strong>
+          <span style="color: var(--text-secondary); margin-left: 8px;">${med.dosage || ''}</span>
+        </div>
+        <div style="color: var(--status-success);">${takenCount} doses taken this week</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadPhotos() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/media/photos?limit=20`);
+    const container = document.getElementById('photo-gallery');
+    
+    if (!container) return;
+    
+    if (!data.photos || data.photos.length === 0) {
+      container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 40px;">No photos yet</p>';
+      return;
+    }
+    
+    container.innerHTML = data.photos.map(photo => `
+      <div class="photo-item" onclick="viewPhoto('${photo.file_url}')">
+        <img src="${photo.file_url}" alt="Photo">
+        <span class="photo-date">${formatDateShort(photo.created_at)}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Error loading photos:', err);
+  }
+}
+
+function viewPhoto(url) {
+  window.open(url, '_blank');
+}
+
+async function loadVoiceMessages() {
+  try {
+    const received = await fetchWithAuth(`${API_URL}/media/voices?direction=from_app&limit=10`);
+    const sent = await fetchWithAuth(`${API_URL}/media/voices?direction=to_app&limit=10`);
+    
+    const receivedContainer = document.getElementById('voice-messages-received');
+    const sentContainer = document.getElementById('voice-messages-sent');
+    
+    if (receivedContainer) {
+      if (!received.voices || received.voices.length === 0) {
+        receivedContainer.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">No voice messages received</p>';
+      } else {
+        receivedContainer.innerHTML = received.voices.map(v => renderVoice(v)).join('');
+      }
+    }
+    
+    if (sentContainer) {
+      if (!sent.voices || sent.voices.length === 0) {
+        sentContainer.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 20px;">No voice messages sent</p>';
+      } else {
+        sentContainer.innerHTML = sent.voices.map(v => renderVoice(v)).join('');
+      }
+    }
+    
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Error loading voice messages:', err);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const data = await fetchWithAuth(`${API_URL}/settings`);
+    
+    // Populate form fields
+    if (data.checkin_interval_hours) {
+      document.getElementById('checkin-interval').value = data.checkin_interval_hours;
+    }
+    if (data.inactivity_threshold_hours) {
+      document.getElementById('inactivity-threshold').value = data.inactivity_threshold_hours;
+    }
+    if (data.speed_alert_kmh) {
+      document.getElementById('speed-threshold').value = data.speed_alert_kmh;
+    }
+    if (data.battery_alert_level) {
+      document.getElementById('battery-threshold').value = data.battery_alert_level;
+    }
+    if (data.father_name) {
+      document.getElementById('father-name-input').value = data.father_name;
+    }
+    if (data.father_phone) {
+      document.getElementById('father-phone-input').value = data.father_phone;
+    }
+    if (data.step_goal) {
+      document.getElementById('step-goal-input').value = data.step_goal;
+    }
+    
+    // Load medications
+    renderMedicationsList(data.medications);
+  } catch (err) {
+    console.error('Error loading settings:', err);
+  }
+}
+
+function renderMedicationsList(medications) {
+  const container = document.getElementById('medications-list');
+  if (!container) return;
+  
+  if (!medications || medications.length === 0) {
+    container.innerHTML = '<p style="color: var(--text-secondary);">No medications added</p>';
+    return;
+  }
+  
+  container.innerHTML = medications.map(med => `
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-default);">
+      <div>
+        <strong>${med.name}</strong>
+        <span style="color: var(--text-secondary); margin-left: 8px;">${med.dosage || ''}</span>
+      </div>
+      <button class="btn btn-secondary" onclick="deleteMedication(${med.id})" data-testid="delete-med-${med.id}">
+        <i data-lucide="trash-2"></i>
+      </button>
+    </div>
+  `).join('');
+  
+  lucide.createIcons();
+}
+
+async function saveGeofence() {
+  if (!geofenceCircle || !geofenceCircle.latLng) {
+    alert('Please click on the map to set a geofence center');
+    return;
+  }
+  
+  const radius = parseInt(document.getElementById('geofence-radius').value) || 500;
+  
+  try {
+    await fetchWithAuth(`${API_URL}/settings/geofence`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        latitude: geofenceCircle.latLng.lat,
+        longitude: geofenceCircle.latLng.lng,
+        radius: radius,
+        name: 'Home'
+      })
+    });
+    
+    alert('Geofence saved successfully');
+  } catch (err) {
+    console.error('Error saving geofence:', err);
+    alert('Failed to save geofence');
+  }
+}
+
+async function saveAlertSettings() {
+  try {
+    await fetchWithAuth(`${API_URL}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        checkin_interval_hours: document.getElementById('checkin-interval').value,
+        inactivity_threshold_hours: document.getElementById('inactivity-threshold').value,
+        speed_alert_kmh: document.getElementById('speed-threshold').value,
+        battery_alert_level: document.getElementById('battery-threshold').value
+      })
+    });
+    
+    alert('Alert settings saved successfully');
+  } catch (err) {
+    console.error('Error saving settings:', err);
+    alert('Failed to save settings');
+  }
+}
+
+async function saveProfile() {
+  try {
+    await fetchWithAuth(`${API_URL}/settings/profile`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: document.getElementById('father-name-input').value,
+        phone_number: document.getElementById('father-phone-input').value
+      })
+    });
+    
+    await fetchWithAuth(`${API_URL}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        step_goal: document.getElementById('step-goal-input').value
+      })
+    });
+    
+    alert('Profile saved successfully');
+    loadStatus();
+  } catch (err) {
+    console.error('Error saving profile:', err);
+    alert('Failed to save profile');
+  }
+}
+
+function addMedication() {
+  const name = prompt('Enter medication name:');
+  if (!name) return;
+  
+  const dosage = prompt('Enter dosage (optional):');
+  
+  fetchWithAuth(`${API_URL}/settings/medications`, {
+    method: 'POST',
+    body: JSON.stringify({ name, dosage })
+  }).then(() => {
+    loadSettings();
+  }).catch(err => {
+    console.error('Error adding medication:', err);
+    alert('Failed to add medication');
+  });
+}
+
+async function deleteMedication(id) {
+  if (!confirm('Are you sure you want to delete this medication?')) return;
+  
+  try {
+    await fetchWithAuth(`${API_URL}/settings/medications/${id}`, { method: 'DELETE' });
+    loadSettings();
+  } catch (err) {
+    console.error('Error deleting medication:', err);
+  }
+}
+
+// Video Call
+let peerConnection = null;
+let localStream = null;
+
+async function startVideoCall() {
+  try {
+    const status = document.getElementById('call-status');
+    status.textContent = 'Starting call...';
+    
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById('local-video').srcObject = localStream;
+    document.getElementById('call-container').style.display = 'block';
+    
+    // Create peer connection
+    peerConnection = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+    
+    localStream.getTracks().forEach(track => {
+      peerConnection.addTrack(track, localStream);
+    });
+    
+    peerConnection.ontrack = (event) => {
+      document.getElementById('remote-video').srcObject = event.streams[0];
+    };
+    
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('call:ice-candidate', { candidate: event.candidate });
+      }
+    };
+    
+    // Create offer
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    
+    socket.emit('call:offer', { offer });
+    status.textContent = 'Calling Father...';
+    
+    // Update UI
+    document.getElementById('call-actions').innerHTML = `
+      <button class="btn btn-danger" style="padding: 20px 60px; font-size: 18px;" onclick="endCall()" data-testid="end-call-btn">
+        <i data-lucide="phone-off"></i>
+        End Call
+      </button>
+    `;
+    lucide.createIcons();
+    
+    // Listen for answer
+    socket.on('call:answer', async (data) => {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      status.textContent = 'Connected';
+    });
+    
+    socket.on('call:ice-candidate', async (data) => {
+      if (data.candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    });
+    
+  } catch (err) {
+    console.error('Error starting call:', err);
+    document.getElementById('call-status').textContent = 'Failed to start call: ' + err.message;
+  }
+}
+
+function endCall() {
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+  
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  
+  socket.emit('call:hangup');
+  
+  document.getElementById('call-container').style.display = 'none';
+  document.getElementById('call-status').textContent = '';
+  document.getElementById('call-actions').innerHTML = `
+    <button class="btn btn-primary" style="padding: 20px 60px; font-size: 18px;" onclick="startVideoCall()" data-testid="start-call-btn">
+      <i data-lucide="video"></i>
+      Start Video Call
+    </button>
+  `;
+  lucide.createIcons();
+}
+
+// Messages
+function sendTextMessage() {
+  const input = document.getElementById('message-text');
+  const text = input.value.trim();
+  
+  if (!text) return;
+  
+  // Send to app via socket
+  socket.emit('message:text', { text, from: user.name || user.username });
+  
+  input.value = '';
+  alert('Message sent');
+}
+
+let mediaRecorder = null;
+let audioChunks = [];
+
+function toggleRecording() {
+  const btn = document.getElementById('record-btn');
+  const status = document.getElementById('recording-status');
+  
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    btn.innerHTML = '<i data-lucide="mic"></i> Start Recording';
+    status.textContent = 'Processing...';
+  } else {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      
+      mediaRecorder.ondataavailable = (e) => {
+        audioChunks.push(e.data);
+      };
+      
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+        
+        // Upload voice message
+        const formData = new FormData();
+        formData.append('voice', blob, 'voice_message.webm');
+        
+        try {
+          const response = await fetch(`${API_URL}/media/voice/send`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+          });
+          
+          if (response.ok) {
+            status.textContent = 'Message sent!';
+          } else {
+            status.textContent = 'Failed to send';
+          }
+        } catch (err) {
+          status.textContent = 'Failed to send';
+        }
+        
+        stream.getTracks().forEach(track => track.stop());
+      };
+      
+      mediaRecorder.start();
+      btn.innerHTML = '<i data-lucide="square"></i> Stop Recording';
+      status.textContent = 'Recording...';
+    }).catch(err => {
+      status.textContent = 'Microphone access denied';
+    });
+  }
+  
+  lucide.createIcons();
+}
+
+// Reports
+async function generateReport() {
+  const from = document.getElementById('report-from').value;
+  const to = document.getElementById('report-to').value;
+  
+  if (!from || !to) {
+    alert('Please select date range');
+    return;
+  }
+  
+  try {
+    const [locations, alerts, checkins, health] = await Promise.all([
+      fetchWithAuth(`${API_URL}/location/range?from=${from}&to=${to}`),
+      fetchWithAuth(`${API_URL}/alerts?from=${from}&to=${to}`),
+      fetchWithAuth(`${API_URL}/checkin/history?from=${from}&to=${to}`),
+      fetchWithAuth(`${API_URL}/health/summary?from=${from}&to=${to}`)
+    ]);
+    
+    // Calculate stats
+    const totalSteps = health.steps?.reduce((sum, s) => sum + parseInt(s.value), 0) || 0;
+    const totalAlerts = alerts.total || 0;
+    const totalCheckins = checkins.length || 0;
+    
+    // Calculate unique places
+    const places = [];
+    locations.forEach(loc => {
+      const existing = places.find(p => 
+        Math.abs(p.latitude - loc.latitude) < 0.001 && 
+        Math.abs(p.longitude - loc.longitude) < 0.001
+      );
+      if (!existing) {
+        places.push({ latitude: loc.latitude, longitude: loc.longitude });
+      }
+    });
+    
+    // Update UI
+    document.getElementById('report-total-steps').textContent = formatNumber(totalSteps);
+    document.getElementById('report-total-alerts').textContent = totalAlerts;
+    document.getElementById('report-total-checkins').textContent = totalCheckins;
+    document.getElementById('report-places-visited').textContent = places.length;
+    
+    document.getElementById('report-placeholder').style.display = 'none';
+    document.getElementById('report-content').style.display = 'block';
+    
+    // Initialize report map
+    setTimeout(() => {
+      const container = document.getElementById('report-map-container');
+      const reportMap = L.map(container).setView([28.6139, 77.2090], 12);
+      
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(reportMap);
+      
+      if (locations.length > 0) {
+        const points = locations.map(loc => [loc.latitude, loc.longitude]);
+        L.polyline(points, { color: '#3E7C78', weight: 3 }).addTo(reportMap);
+        reportMap.fitBounds(L.polyline(points).getBounds(), { padding: [50, 50] });
+      }
+    }, 100);
+    
+    lucide.createIcons();
+  } catch (err) {
+    console.error('Error generating report:', err);
+    alert('Failed to generate report');
+  }
+}
+
+function exportReport() {
+  window.print();
+}
+
+// Critical Banner
+function showCriticalBanner(alert) {
+  const banner = document.getElementById('critical-banner');
+  document.getElementById('critical-message').textContent = `${alert.title}: ${alert.message}`;
+  banner.classList.add('active');
+  
+  // Play alert sound
+  const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2teleQkOX5fM4bJyGxhBfbHD2JdzHRkvWoOcq6dsIi5SVJCisKtyGRQzVXKLsKttJSpjdY+dpZlkKCxnfpiaqpluNURwfImTjYBdIztkfIygmZNrNT5neYqUoYBfMkB7iZGWh4lfQE5wf42Ui4FgQF12fYaCg35qWmBjbnyMhoZ7cVxcYHJ/ioaEd3VjXV1sdYOFgnt4cmVlZGyAg39/eXNrcXJ5fH+Bf3l5d3h7e35/gH19fH19fX6AgH9+fn5+fn5+fn+AgH9/f39/f4CAf39/f39/f4CAgICAgICAgA==');
+  audio.play();
+}
+
+function acknowledgeCritical() {
+  document.getElementById('critical-banner').classList.remove('active');
+  markAllAlertsRead();
+}
+
+// Notifications
+function showNotification(title, message) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body: message, icon: '/favicon.ico' });
+  } else if ('Notification' in window && Notification.permission !== 'denied') {
+    Notification.requestPermission().then(permission => {
+      if (permission === 'granted') {
+        new Notification(title, { body: message });
+      }
+    });
+  }
+}
+
+// Helper Functions
+async function fetchWithAuth(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...options.headers
+    }
+  });
+  
+  if (response.status === 401) {
+    logout();
+    throw new Error('Session expired');
+  }
+  
+  return response.json();
+}
+
+function formatTime(timestamp) {
+  if (!timestamp) return '--';
+  const date = new Date(timestamp);
+  return date.toLocaleString();
+}
+
+function formatTimeShort(timestamp) {
+  if (!timestamp) return '--';
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatTimeOnly(date) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDateShort(timestamp) {
+  if (!timestamp) return '--';
+  const date = new Date(timestamp);
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function formatNumber(num) {
+  return num.toLocaleString();
+}
+
+function formatDuration(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getMoodEmoji(mood) {
+  const emojis = {
+    happy: '😊',
+    neutral: '😐',
+    sad: '😟',
+    tired: '😴',
+    sick: '🤒'
+  };
+  return emojis[mood] || '😐';
+}
+
+function toggleUserMenu() {
+  // Simple toggle - could be enhanced with dropdown
+  if (confirm('Logout?')) {
+    logout();
+  }
+}
+
+// Request notification permission on load
+if ('Notification' in window) {
+  Notification.requestPermission();
+}

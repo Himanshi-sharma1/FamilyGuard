@@ -1,0 +1,1944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#3E7C78">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>FamilyGuard - Father App</title>
+  <link rel="manifest" href="/app/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --primary: #3E7C78;
+      --primary-dark: #2B5C5D;
+      --danger: #DC2626;
+      --success: #059669;
+      --warning: #D97706;
+      --bg: #F0F4F3;
+      --surface: #FFFFFF;
+      --text: #1C2520;
+      --text-light: #6B7280;
+    }
+    
+    html, body {
+      height: 100%;
+      font-family: 'Nunito', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      touch-action: manipulation;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    
+    /* Splash Screen */
+    .splash-screen {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      color: white;
+    }
+    
+    .splash-screen.hidden {
+      display: none;
+    }
+    
+    .splash-logo {
+      font-size: 72px;
+      margin-bottom: 20px;
+    }
+    
+    .splash-title {
+      font-size: 32px;
+      font-weight: 800;
+    }
+    
+    .splash-subtitle {
+      font-size: 16px;
+      opacity: 0.9;
+      margin-top: 8px;
+    }
+    
+    /* Consent Screen */
+    .consent-screen {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--surface);
+      z-index: 1000;
+      display: none;
+      flex-direction: column;
+      padding: 24px;
+    }
+    
+    .consent-screen.active {
+      display: flex;
+    }
+    
+    .consent-header {
+      text-align: center;
+      padding: 20px 0;
+    }
+    
+    .consent-header h1 {
+      font-size: 28px;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+    
+    .consent-header p {
+      color: var(--text-light);
+      font-size: 16px;
+    }
+    
+    .consent-content {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--bg);
+      border-radius: 16px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    
+    .consent-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid #E5E7EB;
+    }
+    
+    .consent-item-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: rgba(62, 124, 120, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    
+    .consent-item h3 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+    
+    .consent-item p {
+      font-size: 14px;
+      color: var(--text-light);
+      line-height: 1.5;
+    }
+    
+    .consent-agree-btn {
+      width: 100%;
+      padding: 20px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 16px;
+      font-size: 20px;
+      font-weight: 700;
+      cursor: pointer;
+      opacity: 0.5;
+      pointer-events: none;
+      transition: all 0.3s;
+    }
+    
+    .consent-agree-btn.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    
+    /* Main App */
+    .app-container {
+      display: none;
+      height: 100%;
+      flex-direction: column;
+    }
+    
+    .app-container.active {
+      display: flex;
+    }
+    
+    /* Status Bar */
+    .status-bar {
+      background: var(--primary);
+      color: white;
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4ADE80;
+      animation: pulse 2s infinite;
+    }
+    
+    .recording-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.2);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+    }
+    
+    .recording-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #EF4444;
+      animation: pulse 1s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+    
+    /* Greeting */
+    .greeting {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    
+    .greeting h1 {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .greeting p {
+      font-size: 18px;
+      color: var(--text-light);
+    }
+    
+    /* Quick Actions */
+    .quick-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .quick-btn {
+      background: var(--surface);
+      border: none;
+      border-radius: 20px;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+      transition: all 0.2s;
+      min-height: 120px;
+    }
+    
+    .quick-btn:active {
+      transform: scale(0.95);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .quick-btn-icon {
+      font-size: 40px;
+    }
+    
+    .quick-btn-label {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      text-align: center;
+    }
+    
+    /* SOS Section */
+    .sos-section {
+      background: var(--danger);
+      border-radius: 24px;
+      padding: 24px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    
+    .sos-btn {
+      width: 100%;
+      padding: 30px;
+      background: white;
+      color: var(--danger);
+      border: none;
+      border-radius: 16px;
+      font-size: 28px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+    
+    .sos-btn:active {
+      transform: scale(0.98);
+    }
+    
+    .sos-hint {
+      color: white;
+      font-size: 14px;
+      margin-top: 12px;
+      opacity: 0.9;
+    }
+    
+    /* Safe Button */
+    .safe-btn {
+      width: 100%;
+      padding: 30px;
+      background: var(--success);
+      color: white;
+      border: none;
+      border-radius: 24px;
+      font-size: 28px;
+      font-weight: 800;
+      cursor: pointer;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+    
+    .safe-btn:active {
+      transform: scale(0.98);
+      background: #047857;
+    }
+    
+    /* Health Section */
+    .health-section {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    
+    .health-section h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    
+    .health-item {
+      background: var(--bg);
+      border-radius: 16px;
+      padding: 16px 12px;
+      text-align: center;
+      cursor: pointer;
+    }
+    
+    .health-item:active {
+      background: #E5E7EB;
+    }
+    
+    .health-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .health-value {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    
+    .health-label {
+      font-size: 12px;
+      color: var(--text-light);
+    }
+    
+    /* Mood Section */
+    .mood-section {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    
+    .mood-section h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    
+    .mood-grid {
+      display: flex;
+      justify-content: space-around;
+    }
+    
+    .mood-btn {
+      background: none;
+      border: 3px solid transparent;
+      border-radius: 16px;
+      padding: 12px;
+      font-size: 40px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .mood-btn.selected {
+      border-color: var(--primary);
+      background: rgba(62, 124, 120, 0.1);
+    }
+    
+    /* Location Card */
+    .location-card {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 20px;
+      margin-bottom: 100px;
+    }
+    
+    .location-card h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+    
+    #mini-map {
+      height: 200px;
+      border-radius: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .location-address {
+      font-size: 14px;
+      color: var(--text-light);
+    }
+    
+    /* Bottom Navigation */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      display: flex;
+      border-top: 1px solid #E5E7EB;
+      padding: 8px 0;
+      padding-bottom: calc(8px + env(safe-area-inset-bottom));
+      z-index: 100;
+    }
+    
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 12px 8px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--text-light);
+      transition: color 0.2s;
+    }
+    
+    .nav-item.active {
+      color: var(--primary);
+    }
+    
+    .nav-item-icon {
+      font-size: 28px;
+    }
+    
+    .nav-item-label {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .nav-item.sos {
+      background: var(--danger);
+      color: white;
+      border-radius: 12px;
+      margin: 4px 8px;
+    }
+    
+    /* Pages */
+    .page {
+      display: none;
+    }
+    
+    .page.active {
+      display: block;
+    }
+    
+    /* Call Page */
+    .call-btn {
+      width: 100%;
+      padding: 40px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 24px;
+      font-size: 28px;
+      font-weight: 800;
+      cursor: pointer;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    
+    .call-btn:active {
+      transform: scale(0.98);
+      background: var(--primary-dark);
+    }
+    
+    /* Streaming Section */
+    .streaming-section {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    
+    .streaming-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      background: var(--bg);
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .streaming-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .stream-active {
+      color: var(--success);
+    }
+    
+    .stream-inactive {
+      color: var(--text-light);
+    }
+    
+    /* Toggle Switch */
+    .toggle-switch {
+      width: 60px;
+      height: 32px;
+      background: #D1D5DB;
+      border-radius: 16px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      background: white;
+      border-radius: 50%;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.3s;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .toggle-switch.on {
+      background: var(--primary);
+    }
+    
+    .toggle-switch.on::after {
+      transform: translateX(28px);
+    }
+    
+    /* Settings Page */
+    .settings-item {
+      background: var(--surface);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .settings-item h3 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+    
+    .settings-item p {
+      font-size: 14px;
+      color: var(--text-light);
+    }
+    
+    /* Modal */
+    .modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1500;
+      padding: 24px;
+    }
+    
+    .modal.active {
+      display: flex;
+    }
+    
+    .modal-content {
+      background: white;
+      border-radius: 24px;
+      padding: 32px;
+      text-align: center;
+      max-width: 350px;
+      width: 100%;
+    }
+    
+    .modal-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+    }
+    
+    .modal-content h2 {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    
+    .modal-content p {
+      color: var(--text-light);
+      margin-bottom: 24px;
+    }
+    
+    .modal-btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-bottom: 12px;
+    }
+    
+    .modal-btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .modal-btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+    
+    .modal-btn-secondary {
+      background: var(--bg);
+      color: var(--text);
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+    
+    /* Camera Preview */
+    #camera-preview {
+      width: 100%;
+      max-height: 300px;
+      border-radius: 16px;
+      background: #000;
+      margin-bottom: 16px;
+    }
+    
+    /* Video container */
+    #video-container {
+      position: relative;
+    }
+    
+    #remote-video {
+      width: 100%;
+      border-radius: 16px;
+      background: #000;
+    }
+    
+    #local-video {
+      position: absolute;
+      width: 100px;
+      top: 10px;
+      right: 10px;
+      border-radius: 8px;
+      border: 2px solid white;
+    }
+  </style>
+</head>
+<body>
+  <!-- Splash Screen -->
+  <div id="splash" class="splash-screen">
+    <div class="splash-logo">👨‍👧‍👦</div>
+    <div class="splash-title">FamilyGuard</div>
+    <div class="splash-subtitle">Your family cares about you</div>
+  </div>
+  
+  <!-- Consent Screen -->
+  <div id="consent-screen" class="consent-screen">
+    <div class="consent-header">
+      <h1>Welcome to FamilyGuard</h1>
+      <p>Your family cares about your safety</p>
+    </div>
+    
+    <div class="consent-content" id="consent-scroll">
+      <p style="font-size: 16px; margin-bottom: 20px; color: var(--text);">
+        This app helps your family know you are safe. Please read what information is shared:
+      </p>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">📍</div>
+        <div>
+          <h3>Location Sharing</h3>
+          <p>Your location will be shared with your family every 30 seconds so they can see where you are.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">🎙️</div>
+        <div>
+          <h3>Voice Recording</h3>
+          <p>Background audio recording so your family can listen to your surroundings for your safety. You can turn this off anytime.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">📷</div>
+        <div>
+          <h3>Camera Access</h3>
+          <p>Your family can request to see through your camera when needed for your safety. You will always be notified.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">🚨</div>
+        <div>
+          <h3>Emergency SOS</h3>
+          <p>Press the SOS button anytime to immediately alert your family that you need help.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">✅</div>
+        <div>
+          <h3>Check-in System</h3>
+          <p>Press "I Am Safe" button to let your family know you are okay.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">💊</div>
+        <div>
+          <h3>Health Tracking</h3>
+          <p>Track your water intake, mood, and medications.</p>
+        </div>
+      </div>
+      
+      <div class="consent-item">
+        <div class="consent-item-icon">⏸️</div>
+        <div>
+          <h3>You Are In Control</h3>
+          <p>You can pause all features anytime from Settings. This is YOUR choice.</p>
+        </div>
+      </div>
+    </div>
+    
+    <button id="consent-btn" class="consent-agree-btn">I Understand and Agree</button>
+    <p style="text-align: center; margin-top: 12px; font-size: 14px; color: var(--text-light);">
+      Scroll down to read everything before agreeing
+    </p>
+  </div>
+  
+  <!-- Main App -->
+  <div id="app" class="app-container">
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span>Family can see you</span>
+      </div>
+      <div id="recording-status" class="recording-indicator">
+        <div class="recording-dot"></div>
+        <span>Recording</span>
+      </div>
+      <div id="battery-display">🔋 ---%</div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Home Page -->
+      <div id="page-home" class="page active">
+        <div class="greeting">
+          <h1 id="greeting-text">Good Morning!</h1>
+          <p id="date-display">--</p>
+        </div>
+        
+        <button class="safe-btn" onclick="sendCheckin()" data-testid="i-am-safe-btn">
+          ✅ I Am Safe
+        </button>
+        
+        <div class="quick-actions">
+          <button class="quick-btn" onclick="openCamera()" data-testid="take-photo-btn">
+            <span class="quick-btn-icon">📷</span>
+            <span class="quick-btn-label">Take Photo</span>
+          </button>
+          <button class="quick-btn" onclick="recordVoice()" data-testid="voice-msg-btn">
+            <span class="quick-btn-icon">🎤</span>
+            <span class="quick-btn-label">Voice Message</span>
+          </button>
+        </div>
+        
+        <div class="mood-section">
+          <h2>How are you feeling?</h2>
+          <div class="mood-grid">
+            <button class="mood-btn" onclick="selectMood('happy')" data-testid="mood-happy">😊</button>
+            <button class="mood-btn" onclick="selectMood('neutral')" data-testid="mood-neutral">😐</button>
+            <button class="mood-btn" onclick="selectMood('sad')" data-testid="mood-sad">😟</button>
+            <button class="mood-btn" onclick="selectMood('tired')" data-testid="mood-tired">😴</button>
+            <button class="mood-btn" onclick="selectMood('sick')" data-testid="mood-sick">🤒</button>
+          </div>
+        </div>
+        
+        <div class="health-section">
+          <h2>💧 Today's Health</h2>
+          <div class="health-grid">
+            <div class="health-item" onclick="addWater()" data-testid="water-tracker">
+              <div class="health-icon">💧</div>
+              <div class="health-value" id="water-count">0</div>
+              <div class="health-label">Glasses Water</div>
+            </div>
+            <div class="health-item" data-testid="steps-tracker">
+              <div class="health-icon">👣</div>
+              <div class="health-value" id="step-count">0</div>
+              <div class="health-label">Steps</div>
+            </div>
+            <div class="health-item" onclick="showMedications()" data-testid="medication-tracker">
+              <div class="health-icon">💊</div>
+              <div class="health-value" id="med-count">0</div>
+              <div class="health-label">Medications</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="location-card">
+          <h2>📍 Your Location</h2>
+          <div id="mini-map"></div>
+          <p class="location-address" id="current-address">Getting your location...</p>
+        </div>
+      </div>
+      
+      <!-- Call Page -->
+      <div id="page-call" class="page">
+        <div class="greeting">
+          <h1>📞 Call Family</h1>
+          <p>Stay connected with your loved ones</p>
+        </div>
+        
+        <button class="call-btn" onclick="startVideoCall()" data-testid="video-call-btn">
+          📹 Video Call Family
+        </button>
+        
+        <button class="call-btn" style="background: var(--success);" onclick="makePhoneCall()" data-testid="phone-call-btn">
+          📱 Phone Call
+        </button>
+        
+        <div id="call-status" style="text-align: center; margin-top: 24px; color: var(--text-light);"></div>
+        
+        <div id="video-container" class="hidden" style="margin-top: 24px;">
+          <video id="remote-video" autoplay playsinline></video>
+          <video id="local-video" autoplay playsinline muted></video>
+          <button class="call-btn" style="background: var(--danger); margin-top: 16px;" onclick="endCall()" data-testid="end-call-btn">
+            📵 End Call
+          </button>
+        </div>
+      </div>
+      
+      <!-- SOS Page -->
+      <div id="page-sos" class="page">
+        <div class="greeting">
+          <h1 style="color: var(--danger);">🚨 Emergency</h1>
+          <p>Press and hold the button below for 2 seconds</p>
+        </div>
+        
+        <div class="sos-section" style="margin-top: 40px;">
+          <button id="sos-btn" class="sos-btn" data-testid="sos-btn">
+            🆘 SOS EMERGENCY
+          </button>
+          <p class="sos-hint">Press and hold for 2 seconds to send alert</p>
+        </div>
+      </div>
+      
+      <!-- Settings Page -->
+      <div id="page-settings" class="page">
+        <div class="greeting">
+          <h1>⚙️ Settings</h1>
+          <p>Control your preferences</p>
+        </div>
+        
+        <div class="settings-item">
+          <div>
+            <h3>Location Sharing</h3>
+            <p>Let family see where you are</p>
+          </div>
+          <div class="toggle-switch on" id="toggle-location" onclick="toggleSetting('location')" data-testid="toggle-location"></div>
+        </div>
+        
+        <div class="settings-item">
+          <div>
+            <h3>🎙️ Background Recording</h3>
+            <p>24/7 audio for your safety</p>
+          </div>
+          <div class="toggle-switch on" id="toggle-recording" onclick="toggleSetting('recording')" data-testid="toggle-recording"></div>
+        </div>
+        
+        <div class="settings-item">
+          <div>
+            <h3>📷 Camera Access</h3>
+            <p>Let family see through camera</p>
+          </div>
+          <div class="toggle-switch on" id="toggle-camera" onclick="toggleSetting('camera')" data-testid="toggle-camera"></div>
+        </div>
+        
+        <div class="settings-item">
+          <div>
+            <h3>Voice Alerts</h3>
+            <p>Hear messages spoken aloud</p>
+          </div>
+          <div class="toggle-switch on" id="toggle-voice" onclick="toggleSetting('voice')" data-testid="toggle-voice"></div>
+        </div>
+        
+        <div class="settings-item">
+          <div>
+            <h3>Check-in Reminders</h3>
+            <p>Remind me to check in</p>
+          </div>
+          <div class="toggle-switch on" id="toggle-reminder" onclick="toggleSetting('reminder')" data-testid="toggle-reminder"></div>
+        </div>
+        
+        <button class="call-btn" style="background: var(--warning); margin-top: 24px;" onclick="pauseAllTracking()" data-testid="pause-tracking-btn">
+          ⏸️ Pause All Tracking
+        </button>
+      </div>
+    </div>
+    
+    <!-- Bottom Navigation -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" onclick="showPage('home')" data-testid="nav-home">
+        <span class="nav-item-icon">🏠</span>
+        <span class="nav-item-label">Home</span>
+      </button>
+      <button class="nav-item" onclick="showPage('call')" data-testid="nav-call">
+        <span class="nav-item-icon">📞</span>
+        <span class="nav-item-label">Call</span>
+      </button>
+      <button class="nav-item sos" onclick="showPage('sos')" data-testid="nav-sos">
+        <span class="nav-item-icon">🆘</span>
+        <span class="nav-item-label">SOS</span>
+      </button>
+      <button class="nav-item" onclick="showPage('settings')" data-testid="nav-settings">
+        <span class="nav-item-icon">⚙️</span>
+        <span class="nav-item-label">Settings</span>
+      </button>
+    </nav>
+  </div>
+  
+  <!-- Modals -->
+  <div id="checkin-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-icon">✅</div>
+      <h2>Check-in Sent!</h2>
+      <p>Your family knows you are safe.</p>
+      <button class="modal-btn modal-btn-primary" onclick="closeModal('checkin-modal')">OK</button>
+    </div>
+  </div>
+  
+  <div id="sos-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-icon">🚨</div>
+      <h2>SOS Sent!</h2>
+      <p>Your family has been alerted. Help is on the way.</p>
+      <button class="modal-btn modal-btn-primary" onclick="closeModal('sos-modal')">OK</button>
+    </div>
+  </div>
+  
+  <div id="camera-remote-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-icon">📷</div>
+      <h2>Family wants to see you</h2>
+      <p>Your family is requesting camera access</p>
+      <button class="modal-btn modal-btn-primary" onclick="allowCameraRemote()">Allow</button>
+      <button class="modal-btn modal-btn-secondary" onclick="closeModal('camera-remote-modal')">Decline</button>
+    </div>
+  </div>
+  
+  <script>
+    // Configuration
+    const API_URL = window.location.protocol + '//' + window.location.host + '/api/v1';
+    const DEVICE_ID = localStorage.getItem('familyguard_device_id') || 'father_device_' + Date.now();
+    let deviceToken = localStorage.getItem('familyguard_device_token');
+    let socket = null;
+    let map = null;
+    let marker = null;
+    let watchId = null;
+    let currentLocation = null;
+    
+    // Recording state
+    let audioRecorder = null;
+    let audioStream = null;
+    let isRecording = false;
+    let recordingInterval = null;
+    let RECORDING_CHUNK_DURATION = 60000; // 1 minute chunks
+    
+    // Camera state
+    let cameraStream = null;
+    let isCameraStreaming = false;
+    
+    // Settings
+    let settings = {
+      location: true,
+      voice: true,
+      reminder: true,
+      recording: true,
+      camera: true
+    };
+    
+    // Health state
+    let waterCount = 0;
+    let stepCount = 0;
+    let selectedMood = null;
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Load saved settings
+      const savedSettings = localStorage.getItem('familyguard_settings');
+      if (savedSettings) {
+        settings = JSON.parse(savedSettings);
+      }
+      
+      // Show splash for 2 seconds
+      setTimeout(() => {
+        document.getElementById('splash').classList.add('hidden');
+        
+        // Check if consent was given
+        const consent = localStorage.getItem('familyguard_consent');
+        if (consent) {
+          showApp();
+        } else {
+          document.getElementById('consent-screen').classList.add('active');
+          setupConsentScroll();
+        }
+      }, 2000);
+    });
+    
+    // Consent handling
+    function setupConsentScroll() {
+      const scrollEl = document.getElementById('consent-scroll');
+      const btnEl = document.getElementById('consent-btn');
+      
+      scrollEl.addEventListener('scroll', () => {
+        const isAtBottom = scrollEl.scrollHeight - scrollEl.scrollTop <= scrollEl.clientHeight + 50;
+        if (isAtBottom) {
+          btnEl.classList.add('active');
+        }
+      });
+      
+      btnEl.addEventListener('click', async () => {
+        if (!btnEl.classList.contains('active')) return;
+        
+        localStorage.setItem('familyguard_consent', new Date().toISOString());
+        localStorage.setItem('familyguard_device_id', DEVICE_ID);
+        
+        // Register device
+        await registerDevice();
+        
+        document.getElementById('consent-screen').classList.remove('active');
+        showApp();
+      });
+    }
+    
+    async function registerDevice() {
+      try {
+        const response = await fetch(API_URL + '/auth/app-register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: DEVICE_ID,
+            name: 'Father',
+            consent_given: true
+          })
+        });
+        
+        const data = await response.json();
+        deviceToken = data.device_token;
+        localStorage.setItem('familyguard_device_token', deviceToken);
+      } catch (err) {
+        console.error('Registration error:', err);
+      }
+    }
+    
+    function showApp() {
+      document.getElementById('app').classList.add('active');
+      initializeApp();
+    }
+    
+    async function initializeApp() {
+      updateGreeting();
+      initMap();
+      initSocket();
+      startLocationTracking();
+      startBatteryMonitoring();
+      loadSettings();
+      
+      // Start background audio recording if enabled
+      if (settings.recording) {
+        await startBackgroundRecording();
+      }
+      
+      // Update greeting every minute
+      setInterval(updateGreeting, 60000);
+      
+      // Setup SOS button
+      setupSOSButton();
+    }
+    
+    function updateGreeting() {
+      const hour = new Date().getHours();
+      let greeting = 'Good Morning!';
+      if (hour >= 12 && hour < 17) greeting = 'Good Afternoon!';
+      else if (hour >= 17) greeting = 'Good Evening!';
+      
+      document.getElementById('greeting-text').textContent = greeting;
+      
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      document.getElementById('date-display').textContent = new Date().toLocaleDateString('en-US', options);
+    }
+    
+    // ===============================
+    // BACKGROUND AUDIO RECORDING
+    // ===============================
+    async function startBackgroundRecording() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          console.error('MediaDevices not supported');
+          return;
+        }
+        
+        // Request microphone permission
+        audioStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        });
+        
+        startRecordingChunk();
+        
+        // Show recording indicator
+        document.getElementById('recording-status').classList.remove('hidden');
+        isRecording = true;
+        
+        console.log('Background recording started');
+        speakMessage('Recording started for your safety');
+        
+        // Notify server
+        if (socket) {
+          socket.emit('audio:stream:start', { deviceId: DEVICE_ID });
+        }
+        
+      } catch (err) {
+        console.error('Failed to start recording:', err);
+        document.getElementById('recording-status').classList.add('hidden');
+      }
+    }
+    
+    function startRecordingChunk() {
+      if (!audioStream) return;
+      
+      const options = { mimeType: 'audio/webm;codecs=opus' };
+      
+      try {
+        audioRecorder = new MediaRecorder(audioStream, options);
+      } catch (e) {
+        // Fallback to default
+        audioRecorder = new MediaRecorder(audioStream);
+      }
+      
+      const chunks = [];
+      const startTime = new Date().toISOString();
+      
+      audioRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+      
+      audioRecorder.onstop = async () => {
+        if (chunks.length === 0) return;
+        
+        const blob = new Blob(chunks, { type: audioRecorder.mimeType || 'audio/webm' });
+        const endTime = new Date().toISOString();
+        
+        // Upload to server
+        await uploadAudioChunk(blob, startTime, endTime);
+        
+        // Start next chunk if still recording
+        if (isRecording && settings.recording) {
+          startRecordingChunk();
+        }
+      };
+      
+      audioRecorder.start();
+      
+      // Stop after chunk duration
+      setTimeout(() => {
+        if (audioRecorder && audioRecorder.state === 'recording') {
+          audioRecorder.stop();
+        }
+      }, RECORDING_CHUNK_DURATION);
+    }
+    
+    async function uploadAudioChunk(blob, startTime, endTime) {
+      if (!deviceToken) return;
+      
+      try {
+        const formData = new FormData();
+        formData.append('audio', blob, 'recording_' + Date.now() + '.webm');
+        formData.append('start_time', startTime);
+        formData.append('end_time', endTime);
+        formData.append('duration', Math.round(RECORDING_CHUNK_DURATION / 1000));
+        formData.append('segment_type', 'continuous');
+        
+        await fetch(API_URL + '/streaming/audio', {
+          method: 'POST',
+          headers: {
+            'X-Device-Token': deviceToken
+          },
+          body: formData
+        });
+        
+        console.log('Audio chunk uploaded');
+      } catch (err) {
+        console.error('Failed to upload audio chunk:', err);
+      }
+    }
+    
+    function stopBackgroundRecording() {
+      isRecording = false;
+      
+      if (audioRecorder && audioRecorder.state === 'recording') {
+        audioRecorder.stop();
+      }
+      
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => track.stop());
+        audioStream = null;
+      }
+      
+      document.getElementById('recording-status').classList.add('hidden');
+      
+      if (socket) {
+        socket.emit('audio:stream:stop');
+      }
+      
+      console.log('Background recording stopped');
+    }
+    
+    // ===============================
+    // CAMERA STREAMING
+    // ===============================
+    async function startCameraStream() {
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment', width: 640, height: 480 },
+          audio: false 
+        });
+        
+        isCameraStreaming = true;
+        
+        // Create video element to capture frames
+        const video = document.createElement('video');
+        video.srcObject = cameraStream;
+        video.play();
+        
+        // Send frames via socket
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        
+        const sendFrame = () => {
+          if (!isCameraStreaming) return;
+          
+          ctx.drawImage(video, 0, 0, 640, 480);
+          const frame = canvas.toDataURL('image/jpeg', 0.5);
+          
+          if (socket) {
+            socket.emit('camera:stream:frame', { frame });
+          }
+          
+          setTimeout(sendFrame, 500); // 2 FPS for bandwidth
+        };
+        
+        video.onloadedmetadata = () => {
+          if (socket) {
+            socket.emit('camera:stream:start', { deviceId: DEVICE_ID });
+          }
+          sendFrame();
+        };
+        
+        speakMessage('Camera is now sharing with your family');
+        
+      } catch (err) {
+        console.error('Failed to start camera:', err);
+      }
+    }
+    
+    function stopCameraStream() {
+      isCameraStreaming = false;
+      
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+      }
+      
+      if (socket) {
+        socket.emit('camera:stream:stop');
+      }
+    }
+    
+    function allowCameraRemote() {
+      closeModal('camera-remote-modal');
+      startCameraStream();
+    }
+    
+    // ===============================
+    // SOCKET.IO
+    // ===============================
+    function initSocket() {
+      socket = io(window.location.origin);
+      
+      socket.on('connect', () => {
+        console.log('Connected to server');
+        socket.emit('join:app', DEVICE_ID);
+      });
+      
+      socket.on('voice:new', (data) => {
+        speakMessage('New message from your family');
+        playVoiceMessage(data.file_url);
+      });
+      
+      socket.on('message:text', (data) => {
+        showTextMessage(data.text);
+        speakMessage(data.text);
+      });
+      
+      socket.on('checkin:reminder', () => {
+        speakMessage('Please press the I Am Safe button');
+      });
+      
+      socket.on('call:offer', async (data) => {
+        speakMessage('Your family is calling');
+        handleIncomingCall(data);
+      });
+      
+      // Remote control events from dashboard
+      socket.on('remote:audio:start', () => {
+        if (settings.recording) {
+          startBackgroundRecording();
+        }
+      });
+      
+      socket.on('remote:audio:stop', () => {
+        stopBackgroundRecording();
+      });
+      
+      socket.on('remote:camera:start', () => {
+        if (settings.camera) {
+          // Show permission modal
+          document.getElementById('camera-remote-modal').classList.add('active');
+          speakMessage('Your family wants to see you. Tap Allow to share camera.');
+        }
+      });
+      
+      socket.on('remote:camera:stop', () => {
+        stopCameraStream();
+      });
+    }
+    
+    // ===============================
+    // MAP & LOCATION
+    // ===============================
+    function initMap() {
+      map = L.map('mini-map').setView([28.6139, 77.2090], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OSM'
+      }).addTo(map);
+      
+      marker = L.marker([28.6139, 77.2090]).addTo(map);
+    }
+    
+    function startLocationTracking() {
+      if (!navigator.geolocation) {
+        console.error('Geolocation not supported');
+        return;
+      }
+      
+      const options = {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      };
+      
+      watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          currentLocation = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            speed: position.coords.speed || 0
+          };
+          
+          updateMapPosition(currentLocation);
+          sendLocationToServer(currentLocation);
+        },
+        (error) => {
+          console.error('Location error:', error);
+        },
+        options
+      );
+      
+      // Send location every 30 seconds
+      setInterval(() => {
+        if (currentLocation && settings.location) {
+          sendLocationToServer(currentLocation);
+        }
+      }, 30000);
+    }
+    
+    function updateMapPosition(loc) {
+      if (map && marker) {
+        marker.setLatLng([loc.latitude, loc.longitude]);
+        map.panTo([loc.latitude, loc.longitude]);
+      }
+      
+      document.getElementById('current-address').textContent = 
+        'Lat: ' + loc.latitude.toFixed(6) + ', Lng: ' + loc.longitude.toFixed(6);
+    }
+    
+    async function sendLocationToServer(loc) {
+      if (!deviceToken || !settings.location) return;
+      
+      try {
+        await fetch(API_URL + '/location', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Token': deviceToken
+          },
+          body: JSON.stringify({
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            accuracy: loc.accuracy,
+            speed: loc.speed
+          })
+        });
+      } catch (err) {
+        console.error('Failed to send location:', err);
+      }
+    }
+    
+    // ===============================
+    // BATTERY
+    // ===============================
+    function startBatteryMonitoring() {
+      if ('getBattery' in navigator) {
+        navigator.getBattery().then((battery) => {
+          updateBatteryDisplay(battery);
+          battery.addEventListener('levelchange', () => updateBatteryDisplay(battery));
+          battery.addEventListener('chargingchange', () => updateBatteryDisplay(battery));
+          
+          setInterval(() => {
+            sendStatusToServer(battery);
+          }, 60000);
+        });
+      }
+    }
+    
+    function updateBatteryDisplay(battery) {
+      const level = Math.round(battery.level * 100);
+      const charging = battery.charging ? '⚡' : '';
+      document.getElementById('battery-display').textContent = '🔋 ' + level + '%' + charging;
+    }
+    
+    async function sendStatusToServer(battery) {
+      if (!deviceToken) return;
+      
+      try {
+        await fetch(API_URL + '/status', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Token': deviceToken
+          },
+          body: JSON.stringify({
+            battery_level: Math.round(battery.level * 100),
+            is_charging: battery.charging
+          })
+        });
+      } catch (err) {
+        console.error('Failed to send status:', err);
+      }
+    }
+    
+    // ===============================
+    // PAGE NAVIGATION
+    // ===============================
+    function showPage(page) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById('page-' + page).classList.add('active');
+      
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+    }
+    
+    // ===============================
+    // CHECK-IN
+    // ===============================
+    async function sendCheckin() {
+      if (!deviceToken) return;
+      
+      speakMessage('Check-in sent. Your family knows you are safe.');
+      
+      try {
+        await fetch(API_URL + '/checkin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Token': deviceToken
+          },
+          body: JSON.stringify({
+            latitude: currentLocation?.latitude,
+            longitude: currentLocation?.longitude
+          })
+        });
+        
+        document.getElementById('checkin-modal').classList.add('active');
+      } catch (err) {
+        console.error('Check-in error:', err);
+      }
+    }
+    
+    // ===============================
+    // SOS
+    // ===============================
+    function setupSOSButton() {
+      const sosBtn = document.getElementById('sos-btn');
+      let pressTimer = null;
+      
+      sosBtn.addEventListener('touchstart', () => {
+        pressTimer = setTimeout(() => {
+          triggerSOS();
+        }, 2000);
+      });
+      
+      sosBtn.addEventListener('touchend', () => {
+        clearTimeout(pressTimer);
+      });
+      
+      sosBtn.addEventListener('mousedown', () => {
+        pressTimer = setTimeout(() => {
+          triggerSOS();
+        }, 2000);
+      });
+      
+      sosBtn.addEventListener('mouseup', () => {
+        clearTimeout(pressTimer);
+      });
+    }
+    
+    async function triggerSOS() {
+      speakMessage('SOS alert sent. Your family is being notified.');
+      
+      try {
+        await fetch(API_URL + '/sos', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Token': deviceToken
+          },
+          body: JSON.stringify({
+            latitude: currentLocation?.latitude,
+            longitude: currentLocation?.longitude
+          })
+        });
+        
+        document.getElementById('sos-modal').classList.add('active');
+      } catch (err) {
+        console.error('SOS error:', err);
+      }
+    }
+    
+    // ===============================
+    // HEALTH
+    // ===============================
+    function selectMood(mood) {
+      document.querySelectorAll('.mood-btn').forEach(btn => btn.classList.remove('selected'));
+      event.currentTarget.classList.add('selected');
+      selectedMood = mood;
+      
+      const moodLabels = {
+        happy: 'You feel happy',
+        neutral: 'You feel okay',
+        sad: 'You feel sad',
+        tired: 'You feel tired',
+        sick: 'You feel sick'
+      };
+      
+      speakMessage(moodLabels[mood]);
+      
+      fetch(API_URL + '/health/mood', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Token': deviceToken
+        },
+        body: JSON.stringify({ value: mood })
+      });
+    }
+    
+    function addWater() {
+      waterCount++;
+      document.getElementById('water-count').textContent = waterCount;
+      speakMessage('Water glass added. Total: ' + waterCount);
+      
+      fetch(API_URL + '/health/water', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Token': deviceToken
+        },
+        body: JSON.stringify({ value: waterCount })
+      });
+    }
+    
+    // ===============================
+    // SETTINGS
+    // ===============================
+    function loadSettings() {
+      Object.keys(settings).forEach(key => {
+        const toggle = document.getElementById('toggle-' + key);
+        if (toggle) {
+          if (settings[key]) {
+            toggle.classList.add('on');
+          } else {
+            toggle.classList.remove('on');
+          }
+        }
+      });
+      
+      // Update recording status
+      if (!settings.recording) {
+        document.getElementById('recording-status').classList.add('hidden');
+      }
+    }
+    
+    function toggleSetting(key) {
+      settings[key] = !settings[key];
+      const toggle = document.getElementById('toggle-' + key);
+      
+      if (settings[key]) {
+        toggle.classList.add('on');
+      } else {
+        toggle.classList.remove('on');
+      }
+      
+      localStorage.setItem('familyguard_settings', JSON.stringify(settings));
+      
+      // Handle recording toggle
+      if (key === 'recording') {
+        if (settings.recording) {
+          startBackgroundRecording();
+          speakMessage('Recording started');
+        } else {
+          stopBackgroundRecording();
+          speakMessage('Recording stopped');
+        }
+      }
+      
+      // Handle camera toggle
+      if (key === 'camera' && !settings.camera) {
+        stopCameraStream();
+      }
+    }
+    
+    function pauseAllTracking() {
+      settings.location = false;
+      settings.recording = false;
+      settings.camera = false;
+      
+      localStorage.setItem('familyguard_settings', JSON.stringify(settings));
+      loadSettings();
+      
+      stopBackgroundRecording();
+      stopCameraStream();
+      
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      
+      speakMessage('All tracking paused. Your family cannot see you.');
+    }
+    
+    // ===============================
+    // VOICE & CAMERA ACTIONS
+    // ===============================
+    async function openCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        // In a real app, show camera preview and take photo
+        stream.getTracks().forEach(track => track.stop());
+        speakMessage('Camera opened. Take a photo.');
+      } catch (err) {
+        speakMessage('Cannot access camera');
+      }
+    }
+    
+    async function recordVoice() {
+      speakMessage('Recording voice message. Speak now.');
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        const chunks = [];
+        
+        recorder.ondataavailable = (e) => chunks.push(e.data);
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(track => track.stop());
+          
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('voice', blob, 'voice_message.webm');
+          
+          await fetch(API_URL + '/media/voice', {
+            method: 'POST',
+            headers: { 'X-Device-Token': deviceToken },
+            body: formData
+          });
+          
+          speakMessage('Voice message sent to your family');
+        };
+        
+        recorder.start();
+        setTimeout(() => recorder.stop(), 10000); // Max 10 seconds
+        
+      } catch (err) {
+        speakMessage('Cannot access microphone');
+      }
+    }
+    
+    // ===============================
+    // VIDEO CALL
+    // ===============================
+    let peerConnection = null;
+    let localStream = null;
+    
+    async function startVideoCall() {
+      document.getElementById('call-status').textContent = 'Starting video call...';
+      speakMessage('Starting video call with your family');
+      
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('local-video').srcObject = localStream;
+        document.getElementById('video-container').classList.remove('hidden');
+        
+        // Setup WebRTC
+        peerConnection = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        
+        peerConnection.ontrack = (event) => {
+          document.getElementById('remote-video').srcObject = event.streams[0];
+        };
+        
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('call:ice-candidate', { candidate: event.candidate });
+          }
+        };
+        
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        
+        socket.emit('call:offer', { offer });
+        document.getElementById('call-status').textContent = 'Calling family...';
+        
+      } catch (err) {
+        console.error('Video call error:', err);
+        document.getElementById('call-status').textContent = 'Failed to start call';
+      }
+    }
+    
+    function endCall() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      
+      document.getElementById('video-container').classList.add('hidden');
+      document.getElementById('call-status').textContent = '';
+      
+      socket.emit('call:hangup');
+      speakMessage('Call ended');
+    }
+    
+    function makePhoneCall() {
+      speakMessage('Opening phone dialer');
+      // In a real app, use tel: link
+    }
+    
+    // ===============================
+    // UTILITIES
+    // ===============================
+    function speakMessage(text) {
+      if (!settings.voice) return;
+      
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.9;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        speechSynthesis.speak(utterance);
+      }
+    }
+    
+    function playVoiceMessage(url) {
+      const audio = new Audio(url);
+      audio.volume = 1;
+      audio.play();
+    }
+    
+    function showTextMessage(text) {
+      alert(text);
+    }
+    
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
+    }
+    
+    function showMedications() {
+      speakMessage('Medication tracker');
+    }
+    
+    // Handle incoming call
+    async function handleIncomingCall(data) {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('local-video').srcObject = localStream;
+        document.getElementById('video-container').classList.remove('hidden');
+        
+        peerConnection = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        
+        peerConnection.ontrack = (event) => {
+          document.getElementById('remote-video').srcObject = event.streams[0];
+        };
+        
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('call:ice-candidate', { candidate: event.candidate });
+          }
+        };
+        
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        socket.emit('call:answer', { answer });
+        showPage('call');
+        
+      } catch (err) {
+        console.error('Failed to answer call:', err);
+      }
+    }
+    
+    // Listen for call answer from dashboard
+    if (socket) {
+      socket.on('call:answer', async (data) => {
+        if (peerConnection) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
+      });
+      
+      socket.on('call:ice-candidate', async (data) => {
+        if (peerConnection) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+      });
+      
+      socket.on('call:hangup', () => {
+        endCall();
+      });
+    }
+  </script>
+</body>
+</html>
